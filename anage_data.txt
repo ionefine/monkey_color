@@ -4644,4 +4644,3 @@ HAGRID	Kingdom	Phylum	Class	Order	Family	Genus	Species	Common name	Female maturi
 04669	Fungi	Ascomycota	Saccharomycetes	Saccharomycetales	Saccharomycetaceae	Saccharomyces	cerevisiae	Baker's yeast												0.04		captivity	large	acceptable						4,12,15,44,45,53,56,69,337,338,460,746,932,936,937,981,1209
 04670	Fungi	Ascomycota	Schizosaccharomycetes	Schizosaccharomycetales	Schizosaccharomycetaceae	Schizosaccharomyces	pombe	Fission yeast														unknown	small	low						772,878,1129,1311,1312
 04671	Fungi	Ascomycota	Sordariomycetes	Sordariales	Lasiosphaeriaceae	Podospora	anserina	Filamentous fungus														unknown	small	low						767,768,769,770,771,921,1203
-
