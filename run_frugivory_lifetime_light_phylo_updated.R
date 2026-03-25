@@ -11,15 +11,19 @@
 ## (tab-delimited; uses Genus + Species and Maximum longevity (yrs)).
 
 suppressPackageStartupMessages({
-  library(readr)
-  library(dplyr)
-  library(stringr)
-  library(ggplot2)
-  library(ape)
-  library(phylolm)
+  required_packages <- c("readr", "dplyr", "stringr", "ggplot2", "ape", "phylolm")
+  missing_packages <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
+  if (length(missing_packages) > 0) {
+    stop(
+      "Missing required package(s): ",
+      paste(missing_packages, collapse = ", "),
+      "\nInstall them first, e.g. install.packages(c(",
+      paste(sprintf("\"%s\"", missing_packages), collapse = ", "),
+      "))."
+    )
+  }
+  invisible(lapply(required_packages, library, character.only = TRUE))
 })
-
-`%||%` <- function(x, y) if (!is.null(x)) x else y
 
 args <- commandArgs(trailingOnly = TRUE)
 arg_data_file  <- if (length(args) >= 1) args[[1]] else Sys.getenv("DATA_FILE", unset = "")
@@ -29,6 +33,36 @@ arg_tree_file  <- if (length(args) >= 3) args[[3]] else Sys.getenv("TREE_FILE", 
 data_file  <- if (nzchar(arg_data_file)) arg_data_file else "diurnal_primate_trichromacy_lifespan_master_v0_3_anage.csv"
 anage_file <- if (nzchar(arg_anage_file)) arg_anage_file else "anage_data.txt"
 tree_file  <- if (nzchar(arg_tree_file)) arg_tree_file else "primate_tree.tre"
+
+resolve_tree_file <- function(path) {
+  if (nzchar(path) && file.exists(path)) {
+    return(path)
+  }
+
+  if (nzchar(path) && !file.exists(path)) {
+    message("Tree file not found at provided/default path: ", path)
+  }
+
+  candidates <- list.files(pattern = "\\.(tre|tree|nwk)$", ignore.case = TRUE)
+  if (length(candidates) == 1) {
+    message("Using detected tree file: ", candidates[[1]])
+    return(candidates[[1]])
+  }
+
+  if (length(candidates) > 1) {
+    message(
+      "Multiple tree files detected (",
+      paste(candidates, collapse = ", "),
+      "). Pass one explicitly as arg 3 or TREE_FILE."
+    )
+  } else {
+    message("No phylogenetic tree file found; phylogenetic models will be skipped.")
+  }
+
+  NA_character_
+}
+
+tree_file <- resolve_tree_file(tree_file)
 
 zscore_local <- function(x) {
   x <- as.numeric(x)
@@ -88,6 +122,17 @@ read_main_data <- function(path) {
   }
 }
 
+assert_required_columns <- function(df) {
+  required <- c("routine_trichromacy", "diet_pct_fruit_eltontraits")
+  missing_cols <- setdiff(required, names(df))
+  if (length(missing_cols) > 0) {
+    stop(
+      "Main dataset is missing required column(s): ",
+      paste(missing_cols, collapse = ", ")
+    )
+  }
+}
+
 read_anage_data <- function(path) {
   if (!file.exists(path)) {
     stop("AnAge file not found: ", path)
@@ -121,6 +166,7 @@ read_anage_data <- function(path) {
 }
 
 dat <- read_main_data(data_file)
+assert_required_columns(dat)
 anage_lookup <- read_anage_data(anage_file)
 
 if (all(c("genus", "species_epithet") %in% names(dat))) {
@@ -138,6 +184,9 @@ if (!"anage_max_longevity_years" %in% names(dat)) {
 
 if (!"foraging_stratum_eltontraits" %in% names(dat)) {
   dat$foraging_stratum_eltontraits <- NA_character_
+}
+if (!"max_longevity_years_pantheria" %in% names(dat)) {
+  dat$max_longevity_years_pantheria <- NA_real_
 }
 
 dat <- dat %>%
@@ -220,115 +269,115 @@ print(AIC(glm_main, glm_fruit_only, glm_light_only))
 cat("\nOdds ratios (main model):\n")
 print(exp(cbind(Estimate = coef(glm_main), confint.default(glm_main))))
 
-if (!file.exists(tree_file)) {
-  warning("Tree file not found; skipping phylogenetic models: ", tree_file)
+if (is.na(tree_file) || !file.exists(tree_file)) {
+  message("Skipping phylogenetic models because no usable tree file was found.")
 } else {
   tree <- read.tree(tree_file)
   keep <- intersect(tree$tip.label, D$scientific_name)
   if (length(keep) < 20) {
-    stop("Very few species overlap between tree and data. Check tip labels.")
+    warning("Very few species overlap between tree and data; skipping phylogenetic models.")
+  } else {
+    tree2 <- drop.tip(tree, setdiff(tree$tip.label, keep))
+    D_phy <- D %>%
+      filter(scientific_name %in% keep) %>%
+      arrange(match(scientific_name, tree2$tip.label))
+    stopifnot(identical(tree2$tip.label, D_phy$scientific_name))
+
+    message("Species in phylogenetic model: ", nrow(D_phy))
+
+    phy_main <- phyloglm(
+      routine_trichromacy ~ z_fruit + z_lifetime_light,
+      data = D_phy,
+      phy = tree2,
+      method = "logistic_MPLE",
+      btol = 50
+    )
+
+    phy_fruit_only <- phyloglm(
+      routine_trichromacy ~ z_fruit,
+      data = D_phy,
+      phy = tree2,
+      method = "logistic_MPLE",
+      btol = 50
+    )
+
+    phy_light_only <- phyloglm(
+      routine_trichromacy ~ z_lifetime_light,
+      data = D_phy,
+      phy = tree2,
+      method = "logistic_MPLE",
+      btol = 50
+    )
+
+    cat("\n===== PHYLOGENETIC LOGISTIC MODELS =====\n")
+    print(summary(phy_main))
+    print(summary(phy_fruit_only))
+    print(summary(phy_light_only))
+
+    phy_compare <- tibble(
+      model = c("phy_main", "phy_fruit_only", "phy_light_only"),
+      logLik = c(logLik(phy_main), logLik(phy_fruit_only), logLik(phy_light_only)),
+      AIC = c(AIC(phy_main), AIC(phy_fruit_only), AIC(phy_light_only))
+    )
+
+    cat("\nPhylogenetic model comparison:\n")
+    print(phy_compare)
+
+    cat("\nApproximate odds ratios (phylogenetic main model):\n")
+    print(exp(coef(phy_main)))
+
+    pred_grid <- expand.grid(
+      z_lifetime_light = seq(min(D_phy$z_lifetime_light), max(D_phy$z_lifetime_light), length.out = 200),
+      z_fruit = c(-1, 0, 1)
+    )
+
+    pred_grid$pred_prob <- predict(phy_main, newdata = pred_grid, type = "response")
+    pred_grid$fruit_level <- factor(
+      pred_grid$z_fruit,
+      levels = c(-1, 0, 1),
+      labels = c("Low frugivory (-1 SD)", "Mean frugivory", "High frugivory (+1 SD)")
+    )
+
+    p <- ggplot(pred_grid, aes(x = z_lifetime_light, y = pred_prob, color = fruit_level)) +
+      geom_line(linewidth = 1) +
+      labs(
+        x = "Standardized lifetime light exposure",
+        y = "Predicted P(routine trichromacy)",
+        color = "",
+        title = "Phylogenetic logistic regression",
+        subtitle = "Routine trichromacy predicted by frugivory and lifetime light exposure"
+      ) +
+      theme_minimal(base_size = 12)
+
+    print(p)
+    ggsave("phylogenetic_trichromacy_predictions_updated.png", p, width = 8, height = 5, dpi = 300)
+
+    analysis_subset <- D_phy %>%
+      select(any_of(c(
+        "scientific_name",
+        "routine_trichromacy",
+        "longevity_years_analysis",
+        "max_longevity_years_pantheria",
+        "anage_max_longevity_years",
+        "anage_max_longevity_years_from_txt",
+        "anage_match_type",
+        "anage_match_name",
+        "diet_pct_fruit_eltontraits",
+        "z_fruit",
+        "log_longevity",
+        "abs_latitude",
+        "uv_raw",
+        "foraging_stratum_eltontraits",
+        "canopy_class",
+        "canopy_multiplier",
+        "lifetime_light_raw",
+        "z_lifetime_light"
+      )))
+
+    write_csv(analysis_subset, "frugivory_lifetime_light_phylo_analysis_subset_updated.csv")
+
+    cat("\nSaved:\n")
+    cat("  frugivory_lifetime_light_phylo_analysis_subset_updated.csv\n")
+    cat("  phylogenetic_trichromacy_predictions_updated.png\n")
   }
-
-  tree2 <- drop.tip(tree, setdiff(tree$tip.label, keep))
-  D_phy <- D %>%
-    filter(scientific_name %in% keep) %>%
-    arrange(match(scientific_name, tree2$tip.label))
-  stopifnot(identical(tree2$tip.label, D_phy$scientific_name))
-
-  message("Species in phylogenetic model: ", nrow(D_phy))
-
-  phy_main <- phyloglm(
-    routine_trichromacy ~ z_fruit + z_lifetime_light,
-    data = D_phy,
-    phy = tree2,
-    method = "logistic_MPLE",
-    btol = 50
-  )
-
-  phy_fruit_only <- phyloglm(
-    routine_trichromacy ~ z_fruit,
-    data = D_phy,
-    phy = tree2,
-    method = "logistic_MPLE",
-    btol = 50
-  )
-
-  phy_light_only <- phyloglm(
-    routine_trichromacy ~ z_lifetime_light,
-    data = D_phy,
-    phy = tree2,
-    method = "logistic_MPLE",
-    btol = 50
-  )
-
-  cat("\n===== PHYLOGENETIC LOGISTIC MODELS =====\n")
-  print(summary(phy_main))
-  print(summary(phy_fruit_only))
-  print(summary(phy_light_only))
-
-  phy_compare <- tibble(
-    model = c("phy_main", "phy_fruit_only", "phy_light_only"),
-    logLik = c(logLik(phy_main), logLik(phy_fruit_only), logLik(phy_light_only)),
-    AIC = c(AIC(phy_main), AIC(phy_fruit_only), AIC(phy_light_only))
-  )
-
-  cat("\nPhylogenetic model comparison:\n")
-  print(phy_compare)
-
-  cat("\nApproximate odds ratios (phylogenetic main model):\n")
-  print(exp(coef(phy_main)))
-
-  pred_grid <- expand.grid(
-    z_lifetime_light = seq(min(D_phy$z_lifetime_light), max(D_phy$z_lifetime_light), length.out = 200),
-    z_fruit = c(-1, 0, 1)
-  )
-
-  pred_grid$pred_prob <- predict(phy_main, newdata = pred_grid, type = "response")
-  pred_grid$fruit_level <- factor(
-    pred_grid$z_fruit,
-    levels = c(-1, 0, 1),
-    labels = c("Low frugivory (-1 SD)", "Mean frugivory", "High frugivory (+1 SD)")
-  )
-
-  p <- ggplot(pred_grid, aes(x = z_lifetime_light, y = pred_prob, color = fruit_level)) +
-    geom_line(linewidth = 1) +
-    labs(
-      x = "Standardized lifetime light exposure",
-      y = "Predicted P(routine trichromacy)",
-      color = "",
-      title = "Phylogenetic logistic regression",
-      subtitle = "Routine trichromacy predicted by frugivory and lifetime light exposure"
-    ) +
-    theme_minimal(base_size = 12)
-
-  print(p)
-  ggsave("phylogenetic_trichromacy_predictions_updated.png", p, width = 8, height = 5, dpi = 300)
-
-  analysis_subset <- D_phy %>%
-    select(any_of(c(
-      "scientific_name",
-      "routine_trichromacy",
-      "longevity_years_analysis",
-      "max_longevity_years_pantheria",
-      "anage_max_longevity_years",
-      "anage_max_longevity_years_from_txt",
-      "anage_match_type",
-      "anage_match_name",
-      "diet_pct_fruit_eltontraits",
-      "z_fruit",
-      "log_longevity",
-      "abs_latitude",
-      "uv_raw",
-      "foraging_stratum_eltontraits",
-      "canopy_class",
-      "canopy_multiplier",
-      "lifetime_light_raw",
-      "z_lifetime_light"
-    )))
-
-  write_csv(analysis_subset, "frugivory_lifetime_light_phylo_analysis_subset_updated.csv")
-
-  cat("\nSaved:\n")
-  cat("  frugivory_lifetime_light_phylo_analysis_subset_updated.csv\n")
-  cat("  phylogenetic_trichromacy_predictions_updated.png\n")
 }
