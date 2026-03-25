@@ -34,6 +34,36 @@ data_file  <- if (nzchar(arg_data_file)) arg_data_file else "diurnal_primate_tri
 anage_file <- if (nzchar(arg_anage_file)) arg_anage_file else "anage_data.txt"
 tree_file  <- if (nzchar(arg_tree_file)) arg_tree_file else "primate_tree.tre"
 
+resolve_tree_file <- function(path) {
+  if (nzchar(path) && file.exists(path)) {
+    return(path)
+  }
+
+  if (nzchar(path) && !file.exists(path)) {
+    message("Tree file not found at provided/default path: ", path)
+  }
+
+  candidates <- list.files(pattern = "\\.(tre|tree|nwk)$", ignore.case = TRUE)
+  if (length(candidates) == 1) {
+    message("Using detected tree file: ", candidates[[1]])
+    return(candidates[[1]])
+  }
+
+  if (length(candidates) > 1) {
+    message(
+      "Multiple tree files detected (",
+      paste(candidates, collapse = ", "),
+      "). Pass one explicitly as arg 3 or TREE_FILE."
+    )
+  } else {
+    message("No phylogenetic tree file found; phylogenetic models will be skipped.")
+  }
+
+  NA_character_
+}
+
+tree_file <- resolve_tree_file(tree_file)
+
 zscore_local <- function(x) {
   x <- as.numeric(x)
   x[x <= -998] <- NA_real_
@@ -239,8 +269,8 @@ print(AIC(glm_main, glm_fruit_only, glm_light_only))
 cat("\nOdds ratios (main model):\n")
 print(exp(cbind(Estimate = coef(glm_main), confint.default(glm_main))))
 
-if (!file.exists(tree_file)) {
-  warning("Tree file not found; skipping phylogenetic models: ", tree_file)
+if (is.na(tree_file) || !file.exists(tree_file)) {
+  message("Skipping phylogenetic models because no usable tree file was found.")
 } else {
   tree <- read.tree(tree_file)
   keep <- intersect(tree$tip.label, D$scientific_name)
