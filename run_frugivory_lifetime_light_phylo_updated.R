@@ -80,6 +80,7 @@ resolve_tree_file <- function(path) {
     )
   } else {
     message("No phylogenetic tree file found in common locations.")
+
     message(
       "Expected a tree file such as 'primate_tree.tre' (or .tree/.nwk/.nex/.nexus) ",
       "in the working directory or in ./data, ./trees, ./input, or ./inputs."
