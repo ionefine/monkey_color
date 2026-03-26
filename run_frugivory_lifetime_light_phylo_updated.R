@@ -43,7 +43,30 @@ resolve_tree_file <- function(path) {
     message("Tree file not found at provided/default path: ", path)
   }
 
-  candidates <- list.files(pattern = "\\.(tre|tree|nwk)$", ignore.case = TRUE)
+  tree_pattern <- "\\.(tre|tree|nwk|nex|nexus)(\\.gz)?$"
+  search_dirs <- c(".", "data", "trees", "input", "inputs")
+  search_dirs <- unique(search_dirs[dir.exists(search_dirs)])
+
+  candidates <- unlist(
+    lapply(
+      search_dirs,
+      function(dir_path) list.files(
+        path = dir_path,
+        pattern = tree_pattern,
+        ignore.case = TRUE,
+        recursive = TRUE,
+        full.names = TRUE
+      )
+    ),
+    use.names = FALSE
+  )
+  candidates <- unique(normalizePath(candidates, winslash = "/", mustWork = FALSE))
+
+  if (length(candidates) == 0) {
+    candidates <- list.files(pattern = tree_pattern, ignore.case = TRUE, full.names = TRUE)
+    candidates <- unique(normalizePath(candidates, winslash = "/", mustWork = FALSE))
+  }
+
   if (length(candidates) == 1) {
     message("Using detected tree file: ", candidates[[1]])
     return(candidates[[1]])
@@ -57,6 +80,10 @@ resolve_tree_file <- function(path) {
     )
   } else {
     message("No phylogenetic tree file found; phylogenetic models will be skipped.")
+    message(
+      "Expected a tree file such as 'primate_tree.tre' (or .tree/.nwk/.nex/.nexus) ",
+      "in the working directory or in ./data, ./trees, ./input, or ./inputs."
+    )
   }
 
   NA_character_
