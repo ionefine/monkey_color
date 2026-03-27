@@ -1,26 +1,13 @@
 #!/usr/bin/env Rscript
 
-# Species-level phylogenetic logistic analysis of routine trichromacy
-# vs frugivory + lifetime UV exposure.
-#
-# Features:
-# - automatic plotting of the pruned phylogenetic tree
-# - CSV outputs for unmatched species
-# - robust species-name reconciliation
-# - remapping support:
-#     * merge onto existing species via column "other name"
-#     * create new grafted tip via column "tip_relation"
-# - explicit merge rules:
-#     * binary outcome: target-priority, then majority vote, else NA
-#     * numeric predictors: mean
-#     * categorical predictors: agreement required else NA
-# - safe grafting using ape::bind.tree()
-# - deduplicate tree to one tip per cleaned species before grafting
-# - model-input diagnostics before phyloglm()
-# - robust phyloglm fitting with safer optimization settings
+# Combined species-level analysis of routine trichromacy vs frugivory +
+# lifetime UV exposure. This script runs:
+#   1) standard (non-phylogenetic) logistic regressions (same specification
+#      as run_species_level_luv_logit.R), and
+#   2) phylogenetic logistic regressions with tree matching/remapping.
 #
 # Usage:
-#   Rscript run_species_level_luv_phylo_logit_v5e.R [main_data.csv] [anage_data.txt] [tree_file] [remap_file]
+#   Rscript phylo_code.R [main_data.csv] [anage_data.txt] [tree_file] [remap_file]
 
 suppressPackageStartupMessages({
   required_packages <- c("readr", "dplyr", "stringr", "tibble", "ape", "phylolm")
@@ -39,7 +26,7 @@ suppressPackageStartupMessages({
 args <- commandArgs(trailingOnly = TRUE)
 data_file  <- if (length(args) >= 1) args[[1]] else "diurnal_primate_trichromacy_lifespan_master_v0_3_anage.csv"
 anage_file <- if (length(args) >= 2) args[[2]] else "anage_data.txt"
-tree_file  <- if (length(args) >= 3) args[[3]] else "primates_tree.nex"
+tree_file  <- if (length(args) >= 3) args[[3]] else "consensusTree_10kTrees_Primates_Version3.nex"
 remap_file <- if (length(args) >= 4) args[[4]] else "remapping.csv"
 
 safe_numeric <- function(x) {
@@ -593,6 +580,9 @@ if (!("scientific_name" %in% names(main_df))) {
   }
 }
 
+anage_lookup_raw <- load_anage_longevity(anage_file)
+
+# ----- Remap/collapse data build for phylogenetic analysis -----
 remap_tbl <- load_remap_table(remap_file)
 readr::write_csv(remap_tbl, "remapping_cleaned.csv")
 
@@ -619,7 +609,7 @@ readr::write_csv(merge_remap_audit, "merge_remap_audit.csv")
 main_df_collapsed <- collapse_merged_species(main_df)
 readr::write_csv(main_df_collapsed, "merged_species_collapse_audit.csv")
 
-anage_lookup <- load_anage_longevity(anage_file) %>%
+anage_lookup <- anage_lookup_raw %>%
   mutate(
     scientific_name_clean_original = clean_species_name(scientific_name),
     scientific_name_clean = apply_merge_map(scientific_name_clean_original, remap_tbl)
@@ -645,12 +635,13 @@ analysis_df <- main_df_collapsed %>%
     longevity_years = if_else(longevity_years > 0, longevity_years, NA_real_),
     log_longevity = log(longevity_years),
     abs_latitude = get_abs_latitude(cur_data_all()),
-    uv_i = cos(abs_latitude * pi / 180),
-    arboreal_i = classify_canopy_multiplier(foraging_stratum_eltontraits),
-    arboreal_i = dplyr::coalesce(arboreal_i, 1.0),
-    luv_raw = longevity_years * uv_i,
+    uv = cos(abs_latitude * pi / 180),
+    arboreal = classify_canopy_multiplier(foraging_stratum_eltontraits),
+    arboreal = dplyr::coalesce(arboreal, 1.0),
+    uv_arb = uv * arboreal,
+    luv_arb = uv_arb * longevity_years,
     z_frugivory = zscore(diet_pct_fruit_eltontraits),
-    z_luv = zscore(luv_raw),
+    z_luv_arb = zscore(luv_arb),
     z_lifetime = zscore(longevity_years)
   ) %>%
   filter(
@@ -658,10 +649,10 @@ analysis_df <- main_df_collapsed %>%
     tolower(included_in_core_non_nocturnal_build) %in% c("true", "t", "1", "yes", "y") |
       is.na(included_in_core_non_nocturnal_build)
   ) %>%
-  filter(!is.na(scientific_name_clean), !is.na(routine_trichromacy), !is.na(z_frugivory), !is.na(z_luv))
+  filter(!is.na(scientific_name_clean), !is.na(routine_trichromacy), !is.na(z_frugivory), !is.na(uv_arb))
 
 if (nrow(analysis_df) < 10) {
-  stop("Too few complete species for analysis after filtering (n = ", nrow(analysis_df), ").")
+  stop("Too few complete species for phylogenetic analysis after filtering (n = ", nrow(analysis_df), ").")
 }
 
 phy_raw <- load_phylo_tree(tree_file)
@@ -840,16 +831,16 @@ diag_tbl <- dplyr::as_tibble(analysis_phylo_df, rownames = NA) %>%
   mutate(
     miss_routine = is.na(routine_trichromacy),
     miss_z_frug = is.na(z_frugivory),
-    miss_z_luv = is.na(z_luv),
-    miss_arboreal = is.na(arboreal_i),
-    complete_full_model = !miss_routine & !miss_z_frug & !miss_z_luv & !miss_arboreal
+    miss_z_luv_arb = is.na(z_luv_arb),
+    miss_z_lifetime = is.na(z_lifetime),
+    complete_full_model = !miss_routine & !miss_z_frug & !miss_z_luv_arb & !miss_z_lifetime
   )
 
 cat("Complete cases for full model:", sum(diag_tbl$complete_full_model), "\n")
 cat("Missing routine_trichromacy:", sum(diag_tbl$miss_routine), "\n")
 cat("Missing z_frugivory:", sum(diag_tbl$miss_z_frug), "\n")
-cat("Missing z_luv:", sum(diag_tbl$miss_z_luv), "\n")
-cat("Missing arboreal_i:", sum(diag_tbl$miss_arboreal), "\n")
+cat("Missing z_luv_arb:", sum(diag_tbl$miss_z_luv_arb), "\n")
+cat("Missing z_lifetime:", sum(diag_tbl$miss_z_lifetime), "\n")
 
 readr::write_csv(diag_tbl, "model_input_diagnostics.csv")
 readr::write_csv(
@@ -867,8 +858,8 @@ if (sum(diag_tbl$complete_full_model) < 10) {
         merged_from_species,
         routine_trichromacy,
         z_frugivory,
-        z_luv,
-        arboreal_i,
+        z_luv_arb,
+        z_lifetime,
         routine_trichromacy_conflict,
         foraging_stratum_conflict
       ) %>%
@@ -877,9 +868,61 @@ if (sum(diag_tbl$complete_full_model) < 10) {
   stop("Too few complete cases for phylogenetic logistic regression after missing-data filtering.")
 }
 
+# Restrict both analyses to the same complete-case species set.
+analysis_phylo_df <- analysis_phylo_df[diag_tbl$complete_full_model, , drop = FALSE]
+phy_pruned <- ape::keep.tip(phy_pruned, rownames(analysis_phylo_df))
+analysis_phylo_df <- analysis_phylo_df[match(phy_pruned$tip.label, rownames(analysis_phylo_df)), , drop = FALSE]
+
 if (!all(analysis_phylo_df$routine_trichromacy %in% c(0L, 1L))) {
   stop("routine_trichromacy must be coded as 0/1 for phylogenetic logistic regression.")
 }
+
+# ----- Non-phylogenetic logistic regressions on the same species as phylo -----
+analysis_nonphy_df <- tibble::as_tibble(analysis_phylo_df, rownames = NA)
+
+model_full <- glm(routine_trichromacy ~ z_frugivory + z_luv_arb + z_lifetime, data = analysis_nonphy_df, family = binomial())
+model_frug <- glm(routine_trichromacy ~ z_frugivory, data = analysis_nonphy_df, family = binomial())
+model_luv <- glm(routine_trichromacy ~ z_luv_arb, data = analysis_nonphy_df, family = binomial())
+model_lifetime <- glm(routine_trichromacy ~ z_lifetime, data = analysis_nonphy_df, family = binomial())
+
+cat("\n===== NON-PHYLOGENETIC DATA SUMMARY (PHYLO-MATCHED SPECIES) =====\n")
+cat("Species analyzed:", nrow(analysis_nonphy_df), "\n")
+cat("Routine trichromat species:", sum(analysis_nonphy_df$routine_trichromacy == 1, na.rm = TRUE), "\n")
+cat("\n===== FULL BINOMIAL LOGIT =====\n")
+print(summary(model_full))
+cat("\n===== REDUCED MODELS =====\n")
+print(summary(model_frug))
+print(summary(model_luv))
+print(summary(model_lifetime))
+cat("\n===== AIC COMPARISON =====\n")
+print(AIC(model_full, model_frug, model_luv, model_lifetime))
+
+coef_tbl_nonphy <- tibble::tibble(
+  term = names(coef(model_full)),
+  log_odds = as.numeric(coef(model_full)),
+  odds_ratio = exp(log_odds)
+)
+
+analysis_export_nonphy <- analysis_nonphy_df %>%
+  select(
+    scientific_name_clean,
+    routine_trichromacy,
+    diet_pct_fruit_eltontraits,
+    z_frugivory,
+    longevity_years,
+    log_longevity,
+    abs_latitude,
+    uv,
+    foraging_stratum_eltontraits,
+    arboreal,
+    uv_arb,
+    luv_arb,
+    z_luv_arb,
+    z_lifetime
+  )
+
+readr::write_csv(analysis_export_nonphy, "species_level_luv_analysis_dataset.csv")
+readr::write_csv(coef_tbl_nonphy, "species_level_luv_full_model_coefficients.csv")
 
 plot_and_save_tree(
   tree = phy_pruned,
@@ -890,7 +933,7 @@ plot_and_save_tree(
 ape::write.tree(phy_pruned, file = "species_level_luv_pruned_tree.nwk")
 
 full_res <- fit_phyloglm_robust(
-  routine_trichromacy ~ z_frugivory + z_luv * arboreal_i,
+  routine_trichromacy ~ z_frugivory + z_luv_arb + z_lifetime,
   data = analysis_phylo_df,
   phy = phy_pruned,
   model_name = "full"
@@ -904,7 +947,7 @@ frug_res <- fit_phyloglm_robust(
 )
 
 luv_res <- fit_phyloglm_robust(
-  routine_trichromacy ~ z_luv,
+  routine_trichromacy ~ z_luv_arb,
   data = analysis_phylo_df,
   phy = phy_pruned,
   model_name = "luv_only"
@@ -961,14 +1004,14 @@ print(summary(model_frug_phy))
 print(summary(model_luv_phy))
 print(summary(model_lifetime_phy))
 
-coef_tbl <- tibble::tibble(
+coef_tbl_phy <- tibble::tibble(
   term = names(coef(model_full_phy)),
   log_odds = as.numeric(coef(model_full_phy)),
   odds_ratio = exp(log_odds)
 )
 
 cat("\n===== FULL PHYLOGENETIC MODEL COEFFICIENTS =====\n")
-print(coef_tbl)
+print(coef_tbl_phy)
 
 analysis_export <- tibble::as_tibble(analysis_phylo_df) %>%
   select(
@@ -985,20 +1028,22 @@ analysis_export <- tibble::as_tibble(analysis_phylo_df) %>%
     longevity_years,
     log_longevity,
     abs_latitude,
-    uv_i,
+    uv,
     foraging_stratum_eltontraits,
     foraging_stratum_conflict,
-    arboreal_i,
-    luv_raw,
+    arboreal,
+    luv_arb,
     z_frugivory,
-    z_luv,
+    z_luv_arb,
     z_lifetime
   )
 
 readr::write_csv(analysis_export, "species_level_luv_phylo_analysis_dataset.csv")
-readr::write_csv(coef_tbl, "species_level_luv_phylo_full_model_coefficients.csv")
+readr::write_csv(coef_tbl_phy, "species_level_luv_phylo_full_model_coefficients.csv")
 
 cat("\nSaved outputs:\n")
+cat(" - species_level_luv_analysis_dataset.csv\n")
+cat(" - species_level_luv_full_model_coefficients.csv\n")
 cat(" - species_level_luv_phylo_analysis_dataset.csv\n")
 cat(" - species_level_luv_phylo_full_model_coefficients.csv\n")
 cat(" - species_level_luv_pruned_tree.nwk\n")
