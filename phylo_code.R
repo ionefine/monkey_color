@@ -582,6 +582,48 @@ if (!("scientific_name" %in% names(main_df))) {
 
 anage_lookup_raw <- load_anage_longevity(anage_file)
 
+
+# ----- Non-phylogenetic data build (matches run_species_level_luv_logit.R) -----
+if (!("max_longevity_years_pantheria" %in% names(main_df))) main_df$max_longevity_years_pantheria <- NA_real_
+if (!("included_in_core_non_nocturnal_build" %in% names(main_df))) main_df$included_in_core_non_nocturnal_build <- NA
+if (!("order" %in% names(main_df))) main_df$order <- NA_character_
+
+analysis_nonphy_df <- main_df %>%
+  mutate(
+    order = stringr::str_to_lower(as.character(order)),
+    routine_trichromacy = safe_numeric(routine_trichromacy),
+    diet_pct_fruit_eltontraits = safe_numeric(diet_pct_fruit_eltontraits),
+    max_longevity_years_pantheria = safe_numeric(max_longevity_years_pantheria),
+    included_in_core_non_nocturnal_build = as.character(included_in_core_non_nocturnal_build)
+  ) %>%
+  left_join(anage_lookup_raw, by = "scientific_name") %>%
+  mutate(
+    longevity_years = dplyr::coalesce(max_longevity_years_pantheria, anage_longevity_years),
+    longevity_years = if_else(longevity_years > 0, longevity_years, NA_real_),
+    log_longevity = log(longevity_years),
+    abs_latitude = get_abs_latitude(cur_data_all()),
+    uv = cos(abs_latitude * pi / 180),
+    arboreal = classify_canopy_multiplier(foraging_stratum_eltontraits),
+    arboreal = dplyr::coalesce(arboreal, 1.0),
+    uv_arb = uv * arboreal,
+    luv_arb = uv_arb * longevity_years,
+    z_frugivory = zscore(diet_pct_fruit_eltontraits),
+    z_luv_arb = zscore(luv_arb),
+    z_lifetime = zscore(longevity_years)
+  ) %>%
+  filter(
+    order == "primates" | is.na(order),
+    tolower(included_in_core_non_nocturnal_build) %in% c("true", "t", "1", "yes", "y") |
+      is.na(included_in_core_non_nocturnal_build)
+  ) %>%
+  distinct(scientific_name, .keep_all = TRUE) %>%
+  filter(!is.na(routine_trichromacy), !is.na(z_frugivory), !is.na(uv_arb))
+
+if (nrow(analysis_nonphy_df) < 10) {
+  stop("Too few complete species for non-phylogenetic analysis (n = ", nrow(analysis_nonphy_df), ").")
+}
+
+      
 # ----- Remap/collapse data build for phylogenetic analysis -----
 remap_tbl <- load_remap_table(remap_file)
 readr::write_csv(remap_tbl, "remapping_cleaned.csv")
