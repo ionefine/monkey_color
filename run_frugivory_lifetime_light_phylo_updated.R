@@ -5,11 +5,13 @@
 ##   - routine_trichromacy
 ##   - diet_pct_fruit_eltontraits
 ##   - either scientific_name OR genus + species_epithet
+
+
 ##   - one latitude option used by get_abs_latitude()
 ##
 ## This script now merges AnAge longevity directly from anage_data.txt
 ## (tab-delimited; uses Genus + Species and Maximum longevity (yrs)).
-
+install.packages("ape")
 suppressPackageStartupMessages({
   required_packages <- c("readr", "dplyr", "stringr", "ggplot2", "ape", "phylolm")
   missing_packages <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
@@ -26,6 +28,7 @@ suppressPackageStartupMessages({
 })
 
 args <- commandArgs(trailingOnly = TRUE)
+setwd("C:/Users/Ione Fine/OneDrive - UW/Documents/code/monkey_color")
 arg_data_file  <- if (length(args) >= 1) args[[1]] else Sys.getenv("DATA_FILE", unset = "")
 arg_anage_file <- if (length(args) >= 2) args[[2]] else Sys.getenv("ANAGE_FILE", unset = "")
 arg_tree_file  <- if (length(args) >= 3) args[[3]] else Sys.getenv("TREE_FILE", unset = "")

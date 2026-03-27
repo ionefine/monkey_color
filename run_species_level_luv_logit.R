@@ -116,12 +116,15 @@ analysis_df <- main_df %>%
     longevity_years = if_else(longevity_years > 0, longevity_years, NA_real_),
     log_longevity = log(longevity_years),
     abs_latitude = get_abs_latitude(cur_data_all()),
-    uv_i = cos(abs_latitude * pi / 180),
-    arboreal_i = classify_canopy_multiplier(foraging_stratum_eltontraits),
-    arboreal_i = dplyr::coalesce(arboreal_i, 1.0),
-    luv_raw = log_longevity * uv_i * arboreal_i,
+    uv = cos(abs_latitude * pi / 180),
+    arboreal = classify_canopy_multiplier(foraging_stratum_eltontraits),
+    arboreal = dplyr::coalesce(arboreal, 1.0),
+    uv_arb =  uv * arboreal,
+    luv_arb =  uv_arb * longevity_years,
     z_frugivory = zscore(diet_pct_fruit_eltontraits),
-    z_luv = zscore(luv_raw)
+    z_uv_arb = zscore(uv_arb),
+    z_luv_arb = zscore(luv_arb),
+    z_lifetime = zscore(longevity_years)
   ) %>%
   filter(
     order == "primates" | is.na(order),
@@ -129,16 +132,16 @@ analysis_df <- main_df %>%
       is.na(included_in_core_non_nocturnal_build)
   ) %>%
   distinct(scientific_name, .keep_all = TRUE) %>%
-  filter(!is.na(routine_trichromacy), !is.na(z_frugivory), !is.na(z_luv))
+  filter(!is.na(routine_trichromacy), !is.na(z_frugivory), !is.na(uv_arb))
 
 if (nrow(analysis_df) < 10) {
   stop("Too few complete species for logistic regression after filtering (n = ", nrow(analysis_df), ").")
 }
 
-model_full <- glm(routine_trichromacy ~ z_frugivory + z_luv, data = analysis_df, family = binomial())
+model_full <- glm(routine_trichromacy ~ z_frugivory + z_luv_arb + z_lifetime, data = analysis_df, family = binomial())
 model_frug <- glm(routine_trichromacy ~ z_frugivory, data = analysis_df, family = binomial())
-model_luv <- glm(routine_trichromacy ~ z_luv, data = analysis_df, family = binomial())
-
+model_luv <- glm(routine_trichromacy ~ z_luv_arb, data = analysis_df, family = binomial())
+model_lifetime <- glm(routine_trichromacy ~ z_lifetime, data = analysis_df, family = binomial())
 cat("\n===== DATA SUMMARY =====\n")
 cat("Species analyzed:", nrow(analysis_df), "\n")
 cat("Routine trichromat species:", sum(analysis_df$routine_trichromacy == 1, na.rm = TRUE), "\n")
@@ -147,8 +150,9 @@ print(summary(model_full))
 cat("\n===== REDUCED MODELS =====\n")
 print(summary(model_frug))
 print(summary(model_luv))
+print(summary(model_lifetime))
 cat("\n===== AIC COMPARISON =====\n")
-print(AIC(model_full, model_frug, model_luv))
+print(AIC(model_full, model_frug, model_uv, model_lifetime))
 
 coef_tbl <- tibble::tibble(
   term = names(coef(model_full)),
@@ -167,11 +171,12 @@ analysis_export <- analysis_df %>%
     longevity_years,
     log_longevity,
     abs_latitude,
-    uv_i,
+    uv,
     foraging_stratum_eltontraits,
-    arboreal_i,
-    luv_raw,
-    z_luv
+    arboreal,
+    uv_arb,
+    luv_arb,
+    z_uv_arb
   )
 
 readr::write_csv(analysis_export, "species_level_luv_analysis_dataset.csv")

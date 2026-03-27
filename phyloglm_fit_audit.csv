@@ -1,0 +1,5 @@
+model_name,attempt,method,btol,log.alpha.bound,success,error_message
+full,1,logistic_MPLE,10,2,TRUE,NA
+frugivory_only,1,logistic_MPLE,10,2,TRUE,NA
+luv_only,1,logistic_MPLE,10,2,TRUE,NA
+lifetime_only,1,logistic_MPLE,10,2,TRUE,NA
