@@ -7,7 +7,7 @@ function [stimuli, t] = generate_complex_tone_stimuli(config)
 %   - Fundamental frequency selectable (e.g., 600 Hz or 5000 Hz)
 %   - Pitch trajectory: 'constant', 'rising', or 'descending'
 %   - Timbre: 'flute' or 'oboe'
-%   - Spatial position at x = +/-135 deg, y = 0 deg, z = 1 m via ITD + ILD
+%   - Spatial position at x = -135, 0, or +135 deg (y = 0, z = 1 m) via ITD + ILD
 %   - Raised-cosine onset/offset ramps of 25 ms
 %
 % INPUT
@@ -17,11 +17,13 @@ function [stimuli, t] = generate_complex_tone_stimuli(config)
 %       .rampDuration      Ramp duration in seconds (default 0.025)
 %       .nStimuli          Number of stimuli, 1 or 2 (default 2)
 %       .stim              1xN struct array (N = nStimuli) with fields:
+%       .snd               Backward-compatible alias for .stim
 %           .timbre        'flute' or 'oboe'
 %           .f0            Fundamental frequency in Hz
 %           .trajectory    'constant' | 'rising' | 'descending'
 %           .glideRatio    End/start F0 ratio for glides (default 1.2)
-%           .azimuthDeg    +135 (left) or -135 (right)
+%           .loc           Source azimuth: +135 (left), -135 (right), 0 (center)
+%           .azimuthDeg    Backward-compatible alias for .loc
 %           .distanceM     Source distance in meters (default 1)
 %           .level         Linear gain scalar (default 0.2)
 %           .phaseMode     'random' or 'sine' (default 'random')
@@ -36,9 +38,9 @@ function [stimuli, t] = generate_complex_tone_stimuli(config)
 % EXAMPLE
 %   cfg.nStimuli = 2;
 %   cfg.stim(1) = struct('timbre','flute','f0',600,'trajectory','constant', ...
-%                        'azimuthDeg',135,'distanceM',1,'level',0.25);
+%                        'loc',135,'distanceM',1,'level',0.25);
 %   cfg.stim(2) = struct('timbre','oboe','f0',5000,'trajectory','descending', ...
-%                        'glideRatio',1.3,'azimuthDeg',-135,'distanceM',1,'level',0.2);
+%                        'glideRatio',1.3,'loc',0,'distanceM',1,'level',0.2);
 %   [stimuli, t] = generate_complex_tone_stimuli(cfg);
 %   sound(stimuli(1).stereo, 48000);
 %
@@ -74,7 +76,8 @@ for k = 1:cfg.nStimuli
     x = x .* env;
     x = p.level * x;
 
-    [left, right] = binauralSpatialize(x, cfg.fs, p.azimuthDeg, p.distanceM);
+    azimuthDeg = stimulusAzimuth(p);
+    [left, right] = binauralSpatialize(x, cfg.fs, azimuthDeg, p.distanceM);
 
     % Hard limit to avoid accidental clipping if multiple tones are mixed later.
     peak = max(abs([left; right]));
@@ -97,6 +100,9 @@ if ~isfield(cfg, 'fs'),           cfg.fs = 48000;      end
 if ~isfield(cfg, 'duration'),     cfg.duration = 0.200; end
 if ~isfield(cfg, 'rampDuration'), cfg.rampDuration = 0.025; end
 if ~isfield(cfg, 'nStimuli'),     cfg.nStimuli = 2;     end
+if ~isfield(cfg, 'stim') && isfield(cfg, 'snd')
+    cfg.stim = cfg.snd; % Backward-compatible alias.
+end
 
 if ~isfield(cfg, 'stim') || isempty(cfg.stim)
     cfg.stim = repmat(defaultStim(), 1, cfg.nStimuli);
@@ -125,6 +131,7 @@ s = struct( ...
     'f0', 600, ...
     'trajectory', 'constant', ...
     'glideRatio', 1.2, ...
+    'loc', 135, ...
     'azimuthDeg', 135, ...
     'distanceM', 1, ...
     'level', 0.2, ...
@@ -141,8 +148,9 @@ end
 if ~(isscalar(p.f0) && p.f0 > 0)
     error('stim(%d).f0 must be a positive scalar.', idx);
 end
-if ~(isscalar(p.azimuthDeg) && any(abs(p.azimuthDeg - [135, -135]) < 1e-6))
-    error('stim(%d).azimuthDeg must be +135 (left) or -135 (right).', idx);
+azimuthDeg = stimulusAzimuth(p);
+if ~(isscalar(azimuthDeg) && any(abs(azimuthDeg - [-135, 0, 135]) < 1e-6))
+    error('stim(%d).loc must be one of -135, 0, or +135 degrees.', idx);
 end
 if ~(isscalar(p.distanceM) && p.distanceM > 0)
     error('stim(%d).distanceM must be a positive scalar.', idx);
@@ -165,6 +173,20 @@ switch lower(trajectory)
         f0_t = f0 * ((1/glideRatio) .^ (t / max(t(end), eps)));
     otherwise
         error('Unknown trajectory: %s', trajectory);
+end
+end
+
+function azimuthDeg = stimulusAzimuth(p)
+% Prefer .loc if present, otherwise use legacy .azimuthDeg.
+hasLoc = isfield(p, 'loc') && ~isempty(p.loc);
+hasAz = isfield(p, 'azimuthDeg') && ~isempty(p.azimuthDeg);
+
+if hasLoc
+    azimuthDeg = p.loc;
+elseif hasAz
+    azimuthDeg = p.azimuthDeg;
+else
+    azimuthDeg = 135;
 end
 end
 
@@ -256,7 +278,7 @@ end
 
 function [L, R] = binauralSpatialize(x, fs, azimuthDeg, distanceM)
 % Naturalistic ITD/ILD approximation for horizontal plane.
-% Positive azimuth (+135) = left, negative (-135) = right.
+% +135 = left, -135 = right, 0 = center.
 
 c = 343;         % m/s
 headRadius = 0.0875; % ~17.5 cm diameter
@@ -275,9 +297,13 @@ ildDB = ildDBMax * sin(abs(theta));
 if azimuthDeg > 0
     gL = 1;
     gR = 10^(-ildDB/20);
-else
+elseif azimuthDeg < 0
     gR = 1;
     gL = 10^(-ildDB/20);
+else
+    % Center location: symmetric ears.
+    gL = 1;
+    gR = 1;
 end
 
 % Distance attenuation (inverse law), referenced to 1 m.
