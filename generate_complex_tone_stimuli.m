@@ -196,13 +196,16 @@ end
 x = x - mean(x);
 x = x / (max(abs(x)) + eps);
 
-% Optional mild spectral tilt shaping in time-domain proxy (gentle).
+% Timbre post-shaping to increase perceptual contrast.
 if strcmpi(timbre, 'flute')
-    % Keep smooth, less buzzy character
-    x = 0.9*x + 0.1*[0; x(1:end-1)];
+    % Smooth and suppress high-frequency buzz (flute-like purity).
+    x = filter([1 1 1 1]/4, 1, x);
+    x = filter([1 1 1 1]/4, 1, x);
+    x = x + 0.01*randn(size(x)); % faint airy component
 else
-    % Slightly brighter/raspier for oboe
-    x = x + 0.08 * [0; diff(x)];
+    % Brighter and reedy: boost high-frequency detail + soft saturation.
+    x = x + 0.16 * [0; diff(x)];
+    x = tanh(1.6 * x);
 end
 
 x = x / (max(abs(x)) + eps);
@@ -213,22 +216,22 @@ h = (1:maxHarm)';
 
 switch lower(timbre)
     case 'flute'
-        % Strong fundamental, rapid high-harmonic rolloff.
-        w = exp(-0.9*(h-1));
-        % Small emphasis at 2nd/3rd harmonics.
-        if maxHarm >= 2, w(2) = w(2) * 1.2; end
-        if maxHarm >= 3, w(3) = w(3) * 1.1; end
+        % Dominant low harmonics, very fast rolloff for a pure tone color.
+        w = exp(-1.5*(h-1));
+        if maxHarm >= 2, w(2) = w(2) * 0.65; end
+        if maxHarm >= 3, w(3) = w(3) * 0.45; end
+        if maxHarm >= 4, w(4:end) = w(4:end) * 0.3; end
 
     case 'oboe'
-        % Rich odd/even harmonic content with slower decay.
-        w = 1 ./ (h .^ 0.85);
+        % Dense harmonic stack with slower decay and odd-harmonic emphasis.
+        w = 1 ./ (h .^ 0.55);
         oddIdx = mod(h,2)==1;
-        w(oddIdx) = w(oddIdx) * 1.35;
-        % Add slight resonance-like bumps.
-        for center = [4, 7, 11]
+        w(oddIdx) = w(oddIdx) * 1.7;
+        % Add strong resonance-like bumps (reedy nasal character).
+        for center = [5, 9, 14]
             if center <= maxHarm
                 idx = max(1,center-1):min(maxHarm,center+1);
-                bump = [0.95; 1.25; 0.95];
+                bump = [0.85; 1.7; 0.85];
                 w(idx) = w(idx) .* bump(1:numel(idx));
             end
         end
