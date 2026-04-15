@@ -228,7 +228,8 @@ switch lower(timbre)
         for center = [4, 7, 11]
             if center <= maxHarm
                 idx = max(1,center-1):min(maxHarm,center+1);
-                w(idx) = w(idx) .* [0.95; 1.25; 0.95](1:numel(idx));
+                bump = [0.95; 1.25; 0.95];
+                w(idx) = w(idx) .* bump(1:numel(idx));
             end
         end
 
