@@ -35,7 +35,7 @@ arg_tree_file  <- if (length(args) >= 3) args[[3]] else Sys.getenv("TREE_FILE", 
 
 data_file  <- if (nzchar(arg_data_file)) arg_data_file else "diurnal_primate_trichromacy_lifespan_master_v0_3_anage.csv"
 anage_file <- if (nzchar(arg_anage_file)) arg_anage_file else "anage_data.txt"
-tree_file  <- if (nzchar(arg_tree_file)) arg_tree_file else "primate_tree.tre"
+tree_file  <- if (nzchar(arg_tree_file)) arg_tree_file else ""
 
 resolve_tree_file <- function(path) {
   if (nzchar(path) && file.exists(path)) {
@@ -82,7 +82,8 @@ resolve_tree_file <- function(path) {
       "). Pass one explicitly as arg 3 or TREE_FILE."
     )
   } else {
-    message("No phylogenetic tree file found; phylogenetic models will be skipped.")
+    message("No phylogenetic tree file found in common locations.")
+
     message(
       "Expected a tree file such as 'primate_tree.tre' (or .tree/.nwk/.nex/.nexus) ",
       "in the working directory or in ./data, ./trees, ./input, or ./inputs."
@@ -300,7 +301,7 @@ cat("\nOdds ratios (main model):\n")
 print(exp(cbind(Estimate = coef(glm_main), confint.default(glm_main))))
 
 if (is.na(tree_file) || !file.exists(tree_file)) {
-  message("Skipping phylogenetic models because no usable tree file was found.")
+  message("Skipping phylogenetic models because no usable external tree was found.")
 } else {
   tree <- read.tree(tree_file)
   keep <- intersect(tree$tip.label, D$scientific_name)
