@@ -582,6 +582,7 @@ if (!("scientific_name" %in% names(main_df))) {
 
 anage_lookup_raw <- load_anage_longevity(anage_file)
 
+
 # ----- Non-phylogenetic data build (matches run_species_level_luv_logit.R) -----
 if (!("max_longevity_years_pantheria" %in% names(main_df))) main_df$max_longevity_years_pantheria <- NA_real_
 if (!("included_in_core_non_nocturnal_build" %in% names(main_df))) main_df$included_in_core_non_nocturnal_build <- NA
@@ -622,51 +623,7 @@ if (nrow(analysis_nonphy_df) < 10) {
   stop("Too few complete species for non-phylogenetic analysis (n = ", nrow(analysis_nonphy_df), ").")
 }
 
-# ----- Non-phylogenetic logistic regressions (from run_species_level_luv_logit.R) -----
-model_full <- glm(routine_trichromacy ~ z_frugivory + z_luv_arb + z_lifetime, data = analysis_nonphy_df, family = binomial())
-model_frug <- glm(routine_trichromacy ~ z_frugivory, data = analysis_nonphy_df, family = binomial())
-model_luv <- glm(routine_trichromacy ~ z_luv_arb, data = analysis_nonphy_df, family = binomial())
-model_lifetime <- glm(routine_trichromacy ~ z_lifetime, data = analysis_nonphy_df, family = binomial())
-
-cat("\n===== NON-PHYLOGENETIC DATA SUMMARY =====\n")
-cat("Species analyzed:", nrow(analysis_nonphy_df), "\n")
-cat("Routine trichromat species:", sum(analysis_nonphy_df$routine_trichromacy == 1, na.rm = TRUE), "\n")
-cat("\n===== FULL BINOMIAL LOGIT =====\n")
-print(summary(model_full))
-cat("\n===== REDUCED MODELS =====\n")
-print(summary(model_frug))
-print(summary(model_luv))
-print(summary(model_lifetime))
-cat("\n===== AIC COMPARISON =====\n")
-print(AIC(model_full, model_frug, model_luv, model_lifetime))
-
-coef_tbl_nonphy <- tibble::tibble(
-  term = names(coef(model_full)),
-  log_odds = as.numeric(coef(model_full)),
-  odds_ratio = exp(log_odds)
-)
-
-analysis_export_nonphy <- analysis_nonphy_df %>%
-  select(
-    scientific_name,
-    routine_trichromacy,
-    diet_pct_fruit_eltontraits,
-    z_frugivory,
-    longevity_years,
-    log_longevity,
-    abs_latitude,
-    uv,
-    foraging_stratum_eltontraits,
-    arboreal,
-    uv_arb,
-    luv_arb,
-    z_luv_arb,
-    z_lifetime
-  )
-
-readr::write_csv(analysis_export_nonphy, "species_level_luv_analysis_dataset.csv")
-readr::write_csv(coef_tbl_nonphy, "species_level_luv_full_model_coefficients.csv")
-
+      
 # ----- Remap/collapse data build for phylogenetic analysis -----
 remap_tbl <- load_remap_table(remap_file)
 readr::write_csv(remap_tbl, "remapping_cleaned.csv")
@@ -953,9 +910,61 @@ if (sum(diag_tbl$complete_full_model) < 10) {
   stop("Too few complete cases for phylogenetic logistic regression after missing-data filtering.")
 }
 
+# Restrict both analyses to the same complete-case species set.
+analysis_phylo_df <- analysis_phylo_df[diag_tbl$complete_full_model, , drop = FALSE]
+phy_pruned <- ape::keep.tip(phy_pruned, rownames(analysis_phylo_df))
+analysis_phylo_df <- analysis_phylo_df[match(phy_pruned$tip.label, rownames(analysis_phylo_df)), , drop = FALSE]
+
 if (!all(analysis_phylo_df$routine_trichromacy %in% c(0L, 1L))) {
   stop("routine_trichromacy must be coded as 0/1 for phylogenetic logistic regression.")
 }
+
+# ----- Non-phylogenetic logistic regressions on the same species as phylo -----
+analysis_nonphy_df <- tibble::as_tibble(analysis_phylo_df, rownames = NA)
+
+model_full <- glm(routine_trichromacy ~ z_frugivory + z_luv_arb + z_lifetime, data = analysis_nonphy_df, family = binomial())
+model_frug <- glm(routine_trichromacy ~ z_frugivory, data = analysis_nonphy_df, family = binomial())
+model_luv <- glm(routine_trichromacy ~ z_luv_arb, data = analysis_nonphy_df, family = binomial())
+model_lifetime <- glm(routine_trichromacy ~ z_lifetime, data = analysis_nonphy_df, family = binomial())
+
+cat("\n===== NON-PHYLOGENETIC DATA SUMMARY (PHYLO-MATCHED SPECIES) =====\n")
+cat("Species analyzed:", nrow(analysis_nonphy_df), "\n")
+cat("Routine trichromat species:", sum(analysis_nonphy_df$routine_trichromacy == 1, na.rm = TRUE), "\n")
+cat("\n===== FULL BINOMIAL LOGIT =====\n")
+print(summary(model_full))
+cat("\n===== REDUCED MODELS =====\n")
+print(summary(model_frug))
+print(summary(model_luv))
+print(summary(model_lifetime))
+cat("\n===== AIC COMPARISON =====\n")
+print(AIC(model_full, model_frug, model_luv, model_lifetime))
+
+coef_tbl_nonphy <- tibble::tibble(
+  term = names(coef(model_full)),
+  log_odds = as.numeric(coef(model_full)),
+  odds_ratio = exp(log_odds)
+)
+
+analysis_export_nonphy <- analysis_nonphy_df %>%
+  select(
+    scientific_name_clean,
+    routine_trichromacy,
+    diet_pct_fruit_eltontraits,
+    z_frugivory,
+    longevity_years,
+    log_longevity,
+    abs_latitude,
+    uv,
+    foraging_stratum_eltontraits,
+    arboreal,
+    uv_arb,
+    luv_arb,
+    z_luv_arb,
+    z_lifetime
+  )
+
+readr::write_csv(analysis_export_nonphy, "species_level_luv_analysis_dataset.csv")
+readr::write_csv(coef_tbl_nonphy, "species_level_luv_full_model_coefficients.csv")
 
 plot_and_save_tree(
   tree = phy_pruned,
